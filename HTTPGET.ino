@@ -25,6 +25,7 @@
 #define SS_PIN              10          // Configurable, see typical pin layout above
 #define BUZZER_PIN          8
 #define STDBY_TOGGLE_PIN    7
+#define READY_TOGGLE_PIN    6
 #define SUCCESS             0
 #define STD_BY              2
 #define FAIL_REPETITION     4
@@ -67,6 +68,8 @@ void system_halt(void){
 void setup(void)
 {
     pinMode(STDBY_TOGGLE_PIN, INPUT);
+    pinMode(READY_TOGGLE_PIN, OUTPUT);
+
     if(digitalRead(STDBY_TOGGLE_PIN) == HIGH){
         hasStdby = true;
     }
@@ -80,98 +83,59 @@ void setup(void)
     if( bREINIT ){
         
         if (wifi.setOprToStation()) {
-            Serial.print("to station + softap ok\r\n");
+            if( hasStdby ){
+                Serial.print("to station + softap ok\r\n");
+            }
         } else {
-            Serial.print("to station + softap err\r\n");
+            if( hasStdby ){
+                Serial.print("to station + softap err\r\n");
+            }
         }
 
         while(!wifi.joinAP(SSID, PASSWORD)){
-          Serial.print("Join AP failure\r\n");
+            if( hasStdby ){
+                Serial.print("Join AP failure\r\n");
+            }
         }
         
-        Serial.print("Join AP success\r\n");
-        Serial.print("IP:");
-        Serial.println( wifi.getLocalIP().c_str());   
+        if( hasStdby ){
+            Serial.print("Join AP success\r\n");
+            Serial.print("IP:");
+            Serial.println( wifi.getLocalIP().c_str());   
 
-        Serial.print("Set Local IP to ");
-        Serial.println(CUSTOM_IP);
+            Serial.print("Set Local IP to ");
+            Serial.println(CUSTOM_IP);
 
-        Serial.print("New IP:");
-        Serial.println( wifi.getLocalIP().c_str());
+            Serial.print("New IP:");
+            Serial.println( wifi.getLocalIP().c_str());
+        }
     }
     
     if( bREINIT ){
     
         if (wifi.disableMUX()) {
-            Serial.println("single ok");
+            if( hasStdby ){
+                Serial.println("single ok");
+            }
         } else {
-            Serial.println("single err");
+            if( hasStdby ){
+                Serial.println("single err");
+            }
 
             while(!wifi.disableMUX()){
-              Serial.println("Retry singleMUX");
+                if( hasStdby ){
+                    Serial.println("Retry singleMUX");
+                }
             }
         }
     }
     
-    Serial.println("setup end");
-    flushHWSerial(); 
+    if( hasStdby ){
+        Serial.println("setup end");
+        flushHWSerial(); 
+    }
 
-    //char *hello = "GET /sjson.php HTTP/1.1\r\nHost: 192.168.1.201\r\nConnection: close\r\n\r\n";
-
-    //if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
-    //    Serial.println("create tcp ok");
-    //} else {
-    //    Serial.println("create tcp err");
-
-    //    while(!wifi.createTCP(HOST_NAME, HOST_PORT)){
-    //      Serial.println("Retry to create tcp");
-    //    }
-    //}
-    //
-    //wifi.send((const uint8_t*)hello, strlen(hello));
-
-    //clean_res = Serial1.readString();
-    //
-    //Serial.print( "Clean Res: " ); 
-    //Serial.println( clean_res ); 
-    //if( clean_res.length() == 0 ){
-    //    Serial.print( "Clean Res: HTTP Error " ); 
-    //    system_halt();
-    //}
-
-    //clean_res = cleanStartBrace(clean_res);
-    //clean_res = cleanEndBrace(clean_res);
-
-    //Serial.print( "Clean Res: " ); 
-    //Serial.println( clean_res ); 
-
-    //StaticJsonBuffer<96> jsonBuffer;
-    //JsonObject &jsonObject = jsonBuffer.parseObject(clean_res);
-
-    //if( !jsonObject.success()){
-    //    Serial.println( "Success Load" ); 
-    //}
-
-    //if( jsonObject.containsKey("cr")){
-    //    Serial.println( "Has balance key" ); 
-    //}
-    //else{
-    //    Serial.println( "No balance key" ); 
-    //}
-
-    //Serial.print( "jsonCr : "); 
-    //Serial.println( (long) jsonObject["cr"], DEC ); 
-
-    //Serial.print( "jsonE : "); 
-    //Serial.println( (long) jsonObject["e"], DEC );
-
-    //Serial.print( "jsonM : "); 
-    //Serial.println( (const char*) jsonObject["m"] );
-
-    //Serial.println( "-End-" ); 
-
-    //wifi.releaseTCP();
-    //flushHWSerial();
+    // FIXME send read signal to other arduino
 }
  
 void loop(void)
@@ -191,42 +155,42 @@ void loop(void)
 
     if( readCard ){
 
-        Serial.print("Recv: ");
-        Serial.println(clean_res);
         clean_res = "";
         bRecvCardID = false;
         readCard = false;
 
-        if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
-            Serial.println("create tcp ok");
-        } else {
+        if (!wifi.createTCP(HOST_NAME, HOST_PORT)) {
             Serial.println("create tcp err");
-
-            while(!wifi.createTCP(HOST_NAME, HOST_PORT)){
-              Serial.println("Retry to create tcp");
-            }
+            refreshCardID();
+            return;
         }
 
-        sprintf(sendHTTP,"GET /hellocard.php?cid=%s&did=%i HTTP/1.1\r\nHost: 192.168.1.201\r\nConnection: close\r\n\r\n", (char*)cardID, DEVICE_ID);
+        sprintf(sendHTTP,"GET /hellocard.php?id=%i&cid=%s HTTP/1.1\r\nHost: 192.168.1.201\r\nConnection: close\r\n\r\n", DEVICE_ID, (char*)cardID);
         wifi.send((const uint8_t*)sendHTTP, strlen(sendHTTP));
 
         clean_res = Serial1.readString();
-        Serial.println(clean_res);
+        //Serial.println(clean_res);
 
         clean_res = cleanStartBrace(clean_res);
         clean_res = cleanEndBrace(clean_res);
 
-        StaticJsonBuffer<96> jsonBuffer;
-        JsonObject &jsonObject = jsonBuffer.parseObject(clean_res);
+        //StaticJsonBuffer<96> jsonBuffer;
+        //JsonObject &jsonObject = jsonBuffer.parseObject(clean_res);
 
-        if( !jsonObject.success()){
-            Serial.println( "Success Load" ); 
-        }
-        
-        String cr = jsonObject["cr"];
-        Serial.print( "CR : " ); 
-        Serial.println( cr ); 
-        Serial.println( "-End-" );
+        //if( !jsonObject.success()){
+        //    Serial.println( "Error Load" ); 
+        //    wifi.releaseTCP();
+        //    refreshCardID();
+        //    return;
+        //}
+        //
+        //String cr = jsonObject["cr"];
+        //Serial.print( "CR : " ); 
+        Serial.println( clean_res ); 
+        digitalWrite(READY_TOGGLE_PIN,HIGH);
+        delay(100);
+        digitalWrite(READY_TOGGLE_PIN,LOW);
+
         wifi.releaseTCP();
         refreshCardID();
     }
@@ -307,7 +271,7 @@ void flushHWSerial(void){
 
 void refreshCardID(){
     for(uint8_t i=0; i < 10; i++){
-        cardID[i] = '\0';
+        cardID[i] = ' ';
     }
     //for(uint8_t i=0; i < 128; i++){
     //    sendHTTP[i] = '\0';
