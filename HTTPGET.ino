@@ -20,8 +20,6 @@
  */
 #include <ArduinoJson.h>
 #include <ESP8266.h>
-#include <SPI.h>
-#include <MFRC522.h>
 
 #define RST_PIN             9           // Configurable, see typical pin layout above
 #define SS_PIN              10          // Configurable, see typical pin layout above
@@ -31,13 +29,9 @@
 #define STD_BY              2
 #define FAIL_REPETITION     4
 
-MFRC522 mfrc522(SS_PIN, RST_PIN);   // Create MFRC522 instance.
-void ringBuzzer(uint8_t);
 void (*resetFunc)(void) = 0;
 String cleanStartBrace(String&);
 String cleanEndBrace(String&);
-void dump_byte_array(byte* , byte);
-void ringBuzzer(uint8_t);
 void flushHWSerial(void);
 void refreshCardID();
 
@@ -50,9 +44,11 @@ void refreshCardID();
 volatile bool readCard = false;
 volatile bool hasStdby = false;
 
+char ctmpChar;
 char cardID[10];
 char    sendHTTP[128];
 bool    bREINIT = true;
+bool    bRecvCardID = false;
 
 uint8_t  RECV_STRING_EXTRA_CHAR = 1;
 uint32_t HOST_PORT = 80;
@@ -80,12 +76,6 @@ void setup(void)
       ;
     }
     Serial.print("setup begin\r\n");
-
-    SPI.begin();                // Init SPI bus
-    mfrc522.PCD_Init();         // Init MFRC522 card
-
-    pinMode(BUZZER_PIN, OUTPUT);
-    ringBuzzer(0);
 
     if( bREINIT ){
         
@@ -186,79 +176,62 @@ void setup(void)
  
 void loop(void)
 {
-    if( hasStdby ){
-        ringBuzzer(STD_BY);
+    clean_res = Serial.readString();
+
+    if( clean_res != "" ){
+        if( clean_res.charAt(0) == '@'){
+            bRecvCardID = true;
+            readCard = true;
+            clean_res = clean_res.substring(1);
+            for(uint8_t idx=0; idx < clean_res.length(); idx++){
+                cardID[idx] = clean_res.charAt(idx);
+            }
+        }
+    }
+
+    if( readCard ){
+
+        Serial.print("Recv: ");
+        Serial.println(clean_res);
+        clean_res = "";
+        bRecvCardID = false;
+        readCard = false;
+
+        if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
+            Serial.println("create tcp ok");
+        } else {
+            Serial.println("create tcp err");
+
+            while(!wifi.createTCP(HOST_NAME, HOST_PORT)){
+              Serial.println("Retry to create tcp");
+            }
+        }
+
+        sprintf(sendHTTP,"GET /hellocard.php?cid=%s&did=%i HTTP/1.1\r\nHost: 192.168.1.201\r\nConnection: close\r\n\r\n", (char*)cardID, DEVICE_ID);
+        wifi.send((const uint8_t*)sendHTTP, strlen(sendHTTP));
+
+        clean_res = Serial1.readString();
+        Serial.println(clean_res);
+
+        clean_res = cleanStartBrace(clean_res);
+        clean_res = cleanEndBrace(clean_res);
+
+        StaticJsonBuffer<96> jsonBuffer;
+        JsonObject &jsonObject = jsonBuffer.parseObject(clean_res);
+
+        if( !jsonObject.success()){
+            Serial.println( "Success Load" ); 
+        }
+        
+        String cr = jsonObject["cr"];
+        Serial.print( "CR : " ); 
+        Serial.println( cr ); 
+        Serial.println( "-End-" );
+        wifi.releaseTCP();
+        refreshCardID();
     }
     
-    // Look for new cards
-    if ( ! mfrc522.PICC_IsNewCardPresent())
-        return;
-
-    // Select one of the cards
-    if ( ! mfrc522.PICC_ReadCardSerial())
-        return;
-
-    clean_res = "";
-    dump_byte_array(mfrc522.uid.uidByte, mfrc522.uid.size);
-    Serial.println("");  
-
-    clean_res.toCharArray(cardID, 10);
-    Serial.println((char*)cardID);  
-    
-    ringBuzzer(SUCCESS);
-    Serial1.println("AT+CIPSTART=\"TCP\",\"192.168.1.201\",80");
-    Serial.println(Serial1.readString());
-
-    sprintf(sendHTTP,"GET /hellocard.php?cardID=%s&id=%i HTTP/1.1\r\nHost: 192.168.1.201\r\nConnection: close\r\n\r\n", (char*)cardID, DEVICE_ID);
-
-    wifi.send((const uint8_t*)sendHTTP, strlen(sendHTTP));
-    clean_res = Serial1.readString();
-    Serial.println(clean_res);
-
-    //Serial.println(sendHTTP);  
-    //if (wifi.createTCP(HOST_NAME, HOST_PORT)) {
-    //    Serial.println("create tcp ok");
-    //} else {
-    //    Serial.println("create tcp err");
-
-    //    while(!wifi.createTCP(HOST_NAME, HOST_PORT)){
-    //      Serial.println("Retry to create tcp");
-    //    }
-    //}
-    //wifi.send((const uint8_t*)sendHTTP.c_str(), (uint32_t)sendHTTP.length());
-
-    //clean_res = Serial1.readString();
-    //
-    //Serial.print( "Clean Res: " ); 
-    //Serial.println( clean_res ); 
-    //if( clean_res.length() == 0 ){
-    //    Serial.print( "Clean Res: HTTP Error " ); 
-    //    system_halt();
-    //}
-
-    //clean_res = cleanStartBrace(clean_res);
-    //clean_res = cleanEndBrace(clean_res);
-
-    //Serial.print( "Clean Res: " ); 
-    //Serial.println( clean_res ); 
-
-    //StaticJsonBuffer<96> jsonBuffer;
-    //JsonObject &jsonObject = jsonBuffer.parseObject(clean_res);
-
-    //if( !jsonObject.success()){
-    //    Serial.println( "Success Load" ); 
-    //}
-
-    Serial1.println( "AT+CIPCLOSE" ); 
-    delay(500);
-    Serial.println( Serial1.readString() ); 
-    Serial.println( "-End-" ); 
-
-    wifi.releaseTCP();
-    flushHWSerial();
-    refreshCardID();
-
-    delay(3000);
+    //delay(3000);
 }
 
 String fixStartBrace(String &str){
@@ -280,6 +253,7 @@ String fixStartBrace(String &str){
 
     return strBuffer;
 }
+
 String cleanStartBrace(String &str){
     uint32_t max = str.length();
     uint32_t idx = 0;
@@ -325,47 +299,6 @@ String cleanEndBrace(String &str){
     return strBuffer;
 }
 
-/*
- * Helper routine to dump a byte array as hex values to Serial.
- */
-void dump_byte_array(byte *buffer, byte bufferSize) {
-    for (byte i = 0; i < bufferSize; i++) {
-        clean_res += String(buffer[i], HEX);
-    }
-    Serial.print(clean_res);
-    Serial.print('\0');
-}
-
-void ringBuzzer(uint8_t mode = 1){
-   
-  if(mode == SUCCESS){
-    digitalWrite(BUZZER_PIN, HIGH);
-    delay(150);
-    digitalWrite(BUZZER_PIN, LOW);
-  }
-  else if(mode == STD_BY){
-
-    for(uint8_t iLoop = 0; iLoop < 2; iLoop++){
-
-      digitalWrite(BUZZER_PIN, HIGH);
-      delay(100);
-      digitalWrite(BUZZER_PIN, LOW);
-      delay(100);
-    }
-
-    delay(3000);
-  }
-  else{
-    for(uint8_t iLoop = 0; iLoop < FAIL_REPETITION; iLoop++){
-
-      digitalWrite(BUZZER_PIN, HIGH);
-      delay(25);
-      digitalWrite(BUZZER_PIN, LOW);
-      delay(25);
-    }
-  }
-}
-
 void flushHWSerial(void){
     while(Serial.available()){
       ; // wait until all buffer are flush
@@ -376,7 +309,7 @@ void refreshCardID(){
     for(uint8_t i=0; i < 10; i++){
         cardID[i] = '\0';
     }
-    for(uint8_t i=0; i < 128; i++){
-        sendHTTP[i] = '\0';
-    }
+    //for(uint8_t i=0; i < 128; i++){
+    //    sendHTTP[i] = '\0';
+    //}
 }
